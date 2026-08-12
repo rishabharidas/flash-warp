@@ -1,11 +1,9 @@
 import React, { useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { X, Copy, Check, Share2, Smartphone } from 'lucide-react';
 
 export default function QRCodeModal({ roomId, onClose }) {
   const [copied, setCopied] = useState(false);
 
-  // Construct shareable URL with room ID in hash
   const shareUrl = `${window.location.origin}${window.location.pathname}#room=${roomId}`;
 
   const handleCopyLink = () => {
@@ -16,31 +14,28 @@ export default function QRCodeModal({ roomId, onClose }) {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content relative text-center" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content-card relative text-center p-6 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg transition-colors"
+          className="absolute top-4 right-4 text-zinc-400 hover:text-white text-xs font-mono"
         >
-          <X className="w-5 h-5" />
+          ✕
         </button>
 
         {/* Title */}
-        <div className="inline-flex p-3 rounded-2xl bg-cyan-500/10 text-cyan-400 mb-3">
-          <Smartphone className="w-6 h-6" />
-        </div>
-        <h2 className="text-xl font-bold text-white mb-1">Scan to Connect Device</h2>
-        <p className="text-xs text-slate-400 mb-6">
-          Scan this QR code with any mobile camera on the same Wi-Fi network to transfer files instantly.
+        <h2 className="text-lg font-bold text-white mb-1">Scan Room QR Code</h2>
+        <p className="text-xs text-zinc-400 mb-5">
+          Scan with your phone camera to open session link instantly.
         </p>
 
         {/* QR Code Container */}
-        <div className="bg-white p-4 rounded-2xl inline-block shadow-xl shadow-cyan-500/10 border-4 border-slate-800 mb-6">
+        <div className="bg-white p-4 rounded-xl inline-block border-2 border-zinc-700 mb-5">
           <QRCodeSVG
             value={shareUrl}
-            size={220}
+            size={200}
             bgColor="#FFFFFF"
-            fgColor="#090D16"
+            fgColor="#000000"
             level="M"
             includeMargin={false}
           />
@@ -48,28 +43,19 @@ export default function QRCodeModal({ roomId, onClose }) {
 
         {/* Room Code & Copy Link */}
         <div className="space-y-3">
-          <div className="flex items-center justify-center gap-2 text-sm text-slate-300 font-medium">
-            <span>Room Code:</span>
-            <span className="font-mono font-bold text-cyan-400 text-lg px-2.5 py-0.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20">
+          <div className="flex items-center justify-center gap-2 text-xs text-zinc-300">
+            <span>Room Key:</span>
+            <span className="font-mono font-bold text-white px-2 py-0.5 rounded bg-zinc-800">
               {roomId}
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              readOnly
-              value={shareUrl}
-              className="glass-input text-xs text-slate-300 py-2.5"
-            />
-            <button
-              onClick={handleCopyLink}
-              className="btn-primary text-xs py-2.5 px-4 whitespace-nowrap flex items-center gap-1.5"
-            >
-              {copied ? <Check className="w-4 h-4 text-slate-950" /> : <Copy className="w-4 h-4 text-slate-950" />}
-              <span>{copied ? 'Copied!' : 'Copy Link'}</span>
-            </button>
-          </div>
+          <button
+            onClick={handleCopyLink}
+            className="btn-mono-white w-full py-2 text-xs justify-center"
+          >
+            {copied ? 'Copied Link to Clipboard' : 'Copy Direct Link'}
+          </button>
         </div>
       </div>
     </div>
