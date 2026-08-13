@@ -37,6 +37,16 @@ export class FileSender {
 
   cancel() {
     this.cancelled = true;
+    if (this.conn && this.conn.open) {
+      try {
+        this.conn.send({
+          type: 'FILE_CANCEL',
+          transferId: this.transferId,
+        });
+      } catch (err) {
+        // channel may already be closed
+      }
+    }
   }
 
   sendNextChunk() {
@@ -129,10 +139,18 @@ export class FileReceiver {
     this.chunks = new Array(metadata.totalChunks);
     this.receivedChunks = 0;
     this.receivedBytes = 0;
+    this.cancelled = false;
     this.startTime = Date.now();
   }
 
+  cancel() {
+    this.cancelled = true;
+    this.chunks = [];
+  }
+
   addChunk(chunkIndex, arrayBuffer) {
+    if (this.cancelled) return;
+
     if (!this.chunks[chunkIndex]) {
       this.chunks[chunkIndex] = arrayBuffer;
       this.receivedChunks++;
@@ -155,7 +173,7 @@ export class FileReceiver {
       }
     }
 
-    if (this.receivedChunks === this.metadata.totalChunks) {
+    if (this.receivedChunks === this.metadata.totalChunks && !this.cancelled) {
       this.finish();
     }
   }

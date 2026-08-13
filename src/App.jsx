@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import confetti from 'canvas-confetti';
 import { useWebRTC } from './hooks/useWebRTC';
 import MinimalTransferCard from './components/MinimalTransferCard';
 import QRCodeModal from './components/QRCodeModal';
 import MediaPreviewModal from './components/MediaPreviewModal';
 import ChatDrawer from './components/ChatDrawer';
+import TextShareModal from './components/TextShareModal';
+import ToastNotification from './components/ToastNotification';
 
 export default function App() {
   const {
@@ -18,16 +19,24 @@ export default function App() {
     remoteFiles,
     transfers,
     chatMessages,
+    textItems,
+    toasts,
+    totalBytesTransferred,
+    addToast,
+    removeToast,
     createRoom,
     joinRoom,
     addSharedFiles,
     removeSharedFile,
     requestFileDownload,
+    cancelTransfer,
     sendChatMessage,
+    sendTextSnippet,
   } = useWebRTC();
 
   const [showQRModal, setShowQRModal] = useState(false);
   const [showChatDrawer, setShowChatDrawer] = useState(false);
+  const [showTextShareModal, setShowTextShareModal] = useState(false);
   const [previewFile, setPreviewFile] = useState(null);
 
   // Auto-connect if URL contains hash e.g. #room=FW-8A92
@@ -43,20 +52,6 @@ export default function App() {
     }
   }, []);
 
-  // Trigger celebratory confetti on completed file download
-  useEffect(() => {
-    const hasCompleted = Object.values(transfers).some(
-      (t) => t.status === 'completed' && !t.hasTriggeredConfetti
-    );
-    if (hasCompleted) {
-      confetti({
-        particleCount: 40,
-        spread: 50,
-        origin: { y: 0.8 },
-      });
-    }
-  }, [transfers]);
-
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-[#09090b] p-4">
       {/* Centered Minimal Transfer Card */}
@@ -68,14 +63,18 @@ export default function App() {
         sharedFiles={sharedFiles}
         remoteFiles={remoteFiles}
         transfers={transfers}
+        totalBytesTransferred={totalBytesTransferred}
         onAddFiles={addSharedFiles}
         onRemoveFile={removeSharedFile}
         onOpenQR={() => setShowQRModal(true)}
         onOpenChat={() => setShowChatDrawer(true)}
+        onOpenTextShare={() => setShowTextShareModal(true)}
         onRequestDownload={requestFileDownload}
+        onCancelTransfer={cancelTransfer}
         onPreviewFile={(f) => setPreviewFile(f)}
         onJoinRoom={joinRoom}
         chatUnreadCount={chatMessages.filter((m) => !m.isMe).length}
+        textShareCount={textItems.length}
       />
 
       {/* Modals & Overlays */}
@@ -83,6 +82,15 @@ export default function App() {
         <QRCodeModal
           roomId={roomId}
           onClose={() => setShowQRModal(false)}
+        />
+      )}
+
+      {showTextShareModal && (
+        <TextShareModal
+          textItems={textItems}
+          onSendText={sendTextSnippet}
+          onClose={() => setShowTextShareModal(false)}
+          onCopySuccess={() => addToast('Copied to clipboard!', 'success')}
         />
       )}
 
@@ -106,6 +114,9 @@ export default function App() {
           onClose={() => setShowChatDrawer(false)}
         />
       )}
+
+      {/* Non-intrusive Toast Notifications */}
+      <ToastNotification toasts={toasts} onDismiss={removeToast} />
     </div>
   );
 }

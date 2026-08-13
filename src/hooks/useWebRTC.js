@@ -23,10 +23,58 @@ export function useWebRTC() {
   // Chat messages: array of { id, sender, text, timestamp }
   const [chatMessages, setChatMessages] = useState([]);
 
+  // Text / Clipboard snippets: array of { id, text, timestamp, isMe }
+  const [textItems, setTextItems] = useState([]);
+
+  // Toast notifications: array of { id, text, type }
+  const [toasts, setToasts] = useState([]);
+
+  // Session Statistics
+  const [totalBytesTransferred, setTotalBytesTransferred] = useState(0);
+
   const peerRef = useRef(null);
   const connectionsRef = useRef({}); // peerId -> DataConnection
+  const lastSeenRef = useRef({}); // peerId -> timestamp
+  const isHostRef = useRef(false);
   const activeSendersRef = useRef({}); // transferId -> FileSender instance
   const activeReceiversRef = useRef({}); // transferId -> FileReceiver instance
+
+  useEffect(() => {
+    isHostRef.current = isHost;
+  }, [isHost]);
+
+  const addToast = useCallback((text, type = 'info') => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, text, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 3500);
+  }, []);
+
+  const removeToast = useCallback((id) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  /**
+   * Remove a disconnected peer and update status
+   */
+  const removePeer = useCallback((remoteId) => {
+    if (connectionsRef.current[remoteId]) {
+      try {
+        connectionsRef.current[remoteId].close();
+      } catch (e) {}
+      delete connectionsRef.current[remoteId];
+    }
+    delete lastSeenRef.current[remoteId];
+
+    const remainingPeers = Object.keys(connectionsRef.current);
+    setConnectedPeers(remainingPeers);
+    addToast('Peer device disconnected', 'warn');
+
+    if (remainingPeers.length === 0) {
+      setConnectionStatus(isHostRef.current ? 'waiting' : 'disconnected');
+    }
+  }, [addToast]);
 
   /**
    * Broadcast a JSON control message to all connected peers
@@ -34,7 +82,9 @@ export function useWebRTC() {
   const broadcast = useCallback((message) => {
     Object.values(connectionsRef.current).forEach((conn) => {
       if (conn.open) {
-        conn.send(message);
+        try {
+          conn.send(message);
+        } catch (e) {}
       }
     });
   }, []);
@@ -45,11 +95,24 @@ export function useWebRTC() {
   const setupConnection = useCallback((conn) => {
     const remoteId = conn.peer;
     connectionsRef.current[remoteId] = conn;
+    lastSeenRef.current[remoteId] = Date.now();
 
     conn.on('open', () => {
+      lastSeenRef.current[remoteId] = Date.now();
       setConnectedPeers(Object.keys(connectionsRef.current));
       setConnectionStatus('connected');
       setErrorMsg('');
+      addToast('Device connected successfully', 'success');
+
+      // Setup ICE connection state monitoring for rapid disconnect detection
+      if (conn.peerConnection) {
+        conn.peerConnection.oniceconnectionstatechange = () => {
+          const iceState = conn.peerConnection?.iceConnectionState;
+          if (iceState === 'disconnected' || iceState === 'failed' || iceState === 'closed') {
+            removePeer(remoteId);
+          }
+        };
+      }
 
       // If host, send inventory to newly connected peer
       setSharedFiles((currentFiles) => {
@@ -59,18 +122,68 @@ export function useWebRTC() {
           size: f.size,
           type: f.type,
         }));
-        conn.send({ type: 'INVENTORY_UPDATE', files: inventory });
+        try {
+          conn.send({ type: 'INVENTORY_UPDATE', files: inventory });
+        } catch (e) {}
         return currentFiles;
       });
     });
 
     conn.on('data', (data) => {
       if (!data || typeof data !== 'object') return;
+      lastSeenRef.current[remoteId] = Date.now();
 
       switch (data.type) {
+        case 'PING':
+          try {
+            conn.send({ type: 'PONG' });
+          } catch (e) {}
+          break;
+
+        case 'PONG':
+          lastSeenRef.current[remoteId] = Date.now();
+          break;
+
+        case 'PEER_DISCONNECT':
+          removePeer(remoteId);
+          break;
+
         case 'INVENTORY_UPDATE':
           setRemoteFiles(data.files || []);
           break;
+
+        case 'TEXT_SHARE': {
+          const item = {
+            id: Date.now() + Math.random(),
+            text: data.text,
+            timestamp: data.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            isMe: false,
+          };
+          setTextItems((prev) => [item, ...prev]);
+          addToast('Received text snippet', 'info');
+          break;
+        }
+
+        case 'FILE_CANCEL': {
+          const cancelId = data.transferId;
+          if (activeSendersRef.current[cancelId]) {
+            activeSendersRef.current[cancelId].cancel();
+            delete activeSendersRef.current[cancelId];
+          }
+          if (activeReceiversRef.current[cancelId]) {
+            activeReceiversRef.current[cancelId].cancel();
+            delete activeReceiversRef.current[cancelId];
+          }
+          setTransfers((prev) => ({
+            ...prev,
+            [cancelId]: {
+              ...prev[cancelId],
+              status: 'cancelled',
+            },
+          }));
+          addToast('Transfer stopped by peer', 'warn');
+          break;
+        }
 
         case 'REQUEST_FILE': {
           // Peer requested a file from host
@@ -119,6 +232,8 @@ export function useWebRTC() {
                       progress: 100,
                     },
                   }));
+                  setTotalBytesTransferred((prev) => prev + target.size);
+                  addToast(`Sent ${target.name}`, 'success');
                   delete activeSendersRef.current[completedId];
                 },
                 (err) => {
@@ -165,6 +280,8 @@ export function useWebRTC() {
                   blob: completedFileData.blob,
                 },
               }));
+              setTotalBytesTransferred((prev) => prev + (data.fileSize || 0));
+              addToast(`Downloaded ${data.fileName}`, 'success');
               delete activeReceiversRef.current[data.transferId];
             }
           );
@@ -197,7 +314,6 @@ export function useWebRTC() {
         }
 
         case 'FILE_COMPLETE': {
-          // Handled inside FileReceiver automatically on last chunk
           break;
         }
 
@@ -221,19 +337,66 @@ export function useWebRTC() {
     });
 
     conn.on('close', () => {
-      delete connectionsRef.current[remoteId];
-      const remainingPeers = Object.keys(connectionsRef.current);
-      setConnectedPeers(remainingPeers);
-      if (remainingPeers.length === 0) {
-        setConnectionStatus(isHost ? 'waiting' : 'disconnected');
-      }
+      removePeer(remoteId);
     });
 
     conn.on('error', (err) => {
       console.error('Connection error:', err);
-      setErrorMsg(`Peer connection error: ${err.message || err}`);
+      removePeer(remoteId);
     });
-  }, [isHost]);
+  }, [removePeer]);
+
+  /**
+   * Periodic Heartbeat ping-pong to clean up stale peer connections (e.g. phone closed browser tab)
+   */
+  useEffect(() => {
+    const heartbeatInterval = setInterval(() => {
+      const now = Date.now();
+      Object.keys(connectionsRef.current).forEach((remoteId) => {
+        const conn = connectionsRef.current[remoteId];
+        const lastSeen = lastSeenRef.current[remoteId] || 0;
+
+        // If no response received for over 8 seconds, prune stale peer
+        if (now - lastSeen > 8000) {
+          removePeer(remoteId);
+        } else if (conn && conn.open) {
+          try {
+            conn.send({ type: 'PING' });
+          } catch (e) {
+            removePeer(remoteId);
+          }
+        }
+      });
+    }, 3000);
+
+    return () => clearInterval(heartbeatInterval);
+  }, [removePeer]);
+
+  /**
+   * Window unload / pagehide notification for clean peer disconnect
+   */
+  useEffect(() => {
+    const handleUnload = () => {
+      Object.values(connectionsRef.current).forEach((conn) => {
+        if (conn && conn.open) {
+          try {
+            conn.send({ type: 'PEER_DISCONNECT' });
+            conn.close();
+          } catch (e) {}
+        }
+      });
+      if (peerRef.current) {
+        peerRef.current.destroy();
+      }
+    };
+
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
+    };
+  }, []);
 
   /**
    * Create a new host session with a unique Room ID
@@ -249,10 +412,7 @@ export function useWebRTC() {
       peerRef.current.destroy();
     }
 
-    const peer = new Peer(id, {
-      debug: 1,
-    });
-
+    const peer = new Peer(id, { debug: 1 });
     peerRef.current = peer;
 
     peer.on('open', (assignedId) => {
@@ -295,13 +455,11 @@ export function useWebRTC() {
       peerRef.current.destroy();
     }
 
-    // Create receiver peer with random ID
     const peer = new Peer({ debug: 1 });
     peerRef.current = peer;
 
     peer.on('open', (myPeerId) => {
       setPeerId(myPeerId);
-      // Connect to the host room
       const conn = peer.connect(cleanRoomId, { reliable: true });
       setupConnection(conn);
     });
@@ -328,7 +486,6 @@ export function useWebRTC() {
 
     setSharedFiles((prev) => {
       const updated = [...prev, ...newFiles];
-      // Broadcast new file list to all connected peers
       const inventory = updated.map((item) => ({
         id: item.id,
         name: item.name,
@@ -365,6 +522,28 @@ export function useWebRTC() {
   }, [broadcast]);
 
   /**
+   * Cancel an active file transfer
+   */
+  const cancelTransfer = useCallback((transferId) => {
+    if (activeSendersRef.current[transferId]) {
+      activeSendersRef.current[transferId].cancel();
+      delete activeSendersRef.current[transferId];
+    }
+    if (activeReceiversRef.current[transferId]) {
+      activeReceiversRef.current[transferId].cancel();
+      delete activeReceiversRef.current[transferId];
+    }
+    broadcast({ type: 'FILE_CANCEL', transferId });
+    setTransfers((prev) => ({
+      ...prev,
+      [transferId]: {
+        ...prev[transferId],
+        status: 'cancelled',
+      },
+    }));
+  }, [broadcast]);
+
+  /**
    * Send text chat message
    */
   const sendChatMessage = useCallback((text) => {
@@ -379,6 +558,22 @@ export function useWebRTC() {
     setChatMessages((prev) => [...prev, msg]);
     broadcast({ type: 'CHAT_MESSAGE', text: text.trim() });
   }, [broadcast]);
+
+  /**
+   * Send text / clipboard snippet
+   */
+  const sendTextSnippet = useCallback((text) => {
+    if (!text.trim()) return;
+    const item = {
+      id: Date.now() + Math.random(),
+      text: text.trim(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      isMe: true,
+    };
+    setTextItems((prev) => [item, ...prev]);
+    broadcast({ type: 'TEXT_SHARE', text: text.trim(), timestamp: item.timestamp });
+    addToast('Text snippet shared', 'success');
+  }, [broadcast, addToast]);
 
   /**
    * Cleanup on unmount
@@ -402,11 +597,18 @@ export function useWebRTC() {
     remoteFiles,
     transfers,
     chatMessages,
+    textItems,
+    toasts,
+    totalBytesTransferred,
+    addToast,
+    removeToast,
     createRoom,
     joinRoom,
     addSharedFiles,
     removeSharedFile,
     requestFileDownload,
+    cancelTransfer,
     sendChatMessage,
+    sendTextSnippet,
   };
 }
